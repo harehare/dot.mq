@@ -10,6 +10,7 @@ A [Graphviz DOT](https://graphviz.org/doc/info/lang.html) language parser implem
 - Graph-level, node-level, and edge-level `[attr]` blocks
 - `strict` keyword support
 - Source node detection for digraphs
+- Serialize parsed graph objects back to DOT strings
 
 ## Installation
 
@@ -30,6 +31,7 @@ mq -I raw 'import "github.com/harehare/dot.mq" | dot::dot_parse(.)' graph.dot
 | `dot_parse(input)` | Parse DOT source, return `{ type, name, strict, nodes, edges, attrs }` |
 | `dot_is_directed(input)` | Returns `true` for `digraph` |
 | `dot_sources(input)` | Returns nodes with no incoming edges |
+| `dot_stringify(g)` | Serialize a parsed graph object back to a DOT string |
 
 ## Example
 
@@ -51,7 +53,7 @@ digraph pipeline {
 
 ```sh
 # Get all node labels
-mq -I raw 'import "dot" | dot::dot_parse(.) | ."nodes" | map(fn(n): n["attrs"]["label"];)' pipeline.dot
+mq -I raw 'iimport "dot" | dot::dot_parse(.)mport "dot" | dot::dot_parse(.) | ."nodes" | map(fn(n): n["attrs"]["label"];)' pipeline.dot
 # => ["Checkout", "Build", "Test", "Deploy"]
 
 # Get edges with labels
@@ -65,11 +67,18 @@ mq -I raw 'import "dot" | dot::dot_sources(.) | map(fn(n): n["id"];)' pipeline.d
 # Count nodes and edges
 mq -I raw 'import "dot" | dot::dot_parse(.) | {"nodes": len(."nodes"), "edges": len(."edges")}' pipeline.dot
 # => {"nodes":4,"edges":4}
+
+# Round-trip: parse then re-serialize
+mq -I raw 'import "dot" | dot::dot_parse(.) | dot::dot_stringify(.)' pipeline.dot
+# => digraph pipeline {
+#      graph [rankdir=LR]
+#      checkout [label="Checkout" shape=box]
+#      ...
+#    }
+
+# Transform: rename a node then serialize back to DOT
+mq -I raw 'import "dot" | dot::dot_parse(.) | set(., "nodes", map(."nodes", fn(n): if (n["id"] == "deploy"): set(n, "id", "release") else: n;)) | dot::dot_stringify(.)' pipeline.dot
 ```
-
-## Compatibility
-
-Requires [mq](https://github.com/harehare/mq) v0.5 or later.
 
 ## License
 

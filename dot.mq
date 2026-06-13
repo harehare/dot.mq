@@ -141,3 +141,56 @@ def dot_sources(input):
   | let targets = map(g["edges"], fn(e): e["to"];)
   | filter(g["nodes"], fn(n): not(any(targets, fn(t): t == n["id"];));)
 end
+
+def _dot_needs_quote(s):
+  is_regex_match(s, "\\s|\"")
+end
+
+def _dot_quote_id(s):
+  if (_dot_needs_quote(s)): "\"" + s + "\"" else: s
+end
+
+def _dot_attrs_to_str(attrs):
+  let ks = keys(attrs)
+  | if (len(ks) == 0):
+      ""
+    else:
+      do
+        let parts = map(ks, fn(k):
+            let v = attrs[k]
+            | if (_dot_needs_quote(v)): k + "=\"" + v + "\"" else: k + "=" + v
+          ;)
+        | " [" + join(parts, " ") + "]"
+      end
+end
+
+def _dot_scope_line(scope, attrs):
+  let ks = keys(attrs)
+  | if (len(ks) == 0):
+      ""
+    else:
+      do
+        let parts = map(ks, fn(k):
+            let v = attrs[k]
+            | if (_dot_needs_quote(v)): k + "=\"" + v + "\"" else: k + "=" + v
+          ;)
+        | "  " + scope + " [" + join(parts, " ") + "]"
+      end
+end
+
+# Converts a parsed graph object back into a Graphviz DOT string.
+# Input: { type, name, strict, nodes, edges, attrs }
+def dot_stringify(g):
+  let sep        = if (g["type"] == "digraph"): "->" else: "--"
+  | let prefix   = if (g["strict"]): "strict " else: ""
+  | let name_str = if (len(g["name"]) > 0): " " + _dot_quote_id(g["name"]) else: ""
+  | let header   = prefix + g["type"] + name_str
+  | let ga       = if (is_none(g["attrs"]["graph"])): dict() else: g["attrs"]["graph"]
+  | let na       = if (is_none(g["attrs"]["node"])):  dict() else: g["attrs"]["node"]
+  | let ea       = if (is_none(g["attrs"]["edge"])):  dict() else: g["attrs"]["edge"]
+  | let scope_lines = filter([_dot_scope_line("graph", ga), _dot_scope_line("node", na), _dot_scope_line("edge", ea)], fn(s): len(s) > 0;)
+  | let node_lines  = map(g["nodes"], fn(n): "  " + _dot_quote_id(n["id"]) + _dot_attrs_to_str(n["attrs"]);)
+  | let edge_lines  = map(g["edges"], fn(e): "  " + _dot_quote_id(e["from"]) + " " + sep + " " + _dot_quote_id(e["to"]) + _dot_attrs_to_str(e["attrs"]);)
+  | let body     = join(scope_lines + node_lines + edge_lines, "\n")
+  | header + " {\n" + body + "\n}"
+end

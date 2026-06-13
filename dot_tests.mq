@@ -127,6 +127,82 @@ def test_no_sources_in_cycle():
   | assert_empty(result)
 end
 
+# -- dot_stringify --
+
+def test_stringify_simple_digraph():
+  let g = {"type": "digraph", "name": "G", "strict": false, "nodes": [{"id": "A", "attrs": dict()}, {"id": "B", "attrs": dict()}], "edges": [{"from": "A", "to": "B", "attrs": dict()}], "attrs": dict()}
+  | let s = dot_stringify(g)
+  | let r = dot_parse(s)
+  | assert_eq(r["type"], "digraph")
+  | assert_eq(r["name"], "G")
+  | assert_len(r["nodes"], 2)
+  | assert_len(r["edges"], 1)
+end
+
+def test_stringify_undirected_graph():
+  let g = {"type": "graph", "name": "G", "strict": false, "nodes": [{"id": "A", "attrs": dict()}, {"id": "B", "attrs": dict()}], "edges": [{"from": "A", "to": "B", "attrs": dict()}], "attrs": dict()}
+  | let s = dot_stringify(g)
+  | let r = dot_parse(s)
+  | assert_eq(r["type"], "graph")
+  | assert_len(r["edges"], 1)
+end
+
+def test_stringify_strict():
+  let g = {"type": "digraph", "name": "G", "strict": true, "nodes": [], "edges": [], "attrs": dict()}
+  | let s = dot_stringify(g)
+  | assert_true(starts_with(s, "strict digraph"))
+  | let r = dot_parse(s)
+  | assert_true(r["strict"])
+end
+
+def test_stringify_anonymous_graph():
+  let g = {"type": "digraph", "name": "", "strict": false, "nodes": [], "edges": [], "attrs": dict()}
+  | let s = dot_stringify(g)
+  | let r = dot_parse(s)
+  | assert_eq(r["name"], "")
+end
+
+def test_stringify_node_with_attrs():
+  let g = {"type": "digraph", "name": "G", "strict": false, "nodes": [{"id": "A", "attrs": {"label": "Start", "shape": "box"}}], "edges": [], "attrs": dict()}
+  | let s = dot_stringify(g)
+  | let r = dot_parse(s)
+  | let node = first(filter(r["nodes"], fn(n): n["id"] == "A";))
+  | assert_eq(node["attrs"]["label"], "Start")
+  | assert_eq(node["attrs"]["shape"], "box")
+end
+
+def test_stringify_edge_with_attrs():
+  let g = {"type": "digraph", "name": "G", "strict": false, "nodes": [{"id": "A", "attrs": dict()}, {"id": "B", "attrs": dict()}], "edges": [{"from": "A", "to": "B", "attrs": {"label": "ok"}}], "attrs": dict()}
+  | let s = dot_stringify(g)
+  | let r = dot_parse(s)
+  | assert_eq(r["edges"][0]["attrs"]["label"], "ok")
+end
+
+def test_stringify_graph_attrs():
+  let g = {"type": "digraph", "name": "G", "strict": false, "nodes": [], "edges": [], "attrs": {"graph": {"rankdir": "LR"}}}
+  | let s = dot_stringify(g)
+  | let r = dot_parse(s)
+  | assert_eq(r["attrs"]["graph"]["rankdir"], "LR")
+end
+
+def test_stringify_quoted_name():
+  let g = {"type": "digraph", "name": "my graph", "strict": false, "nodes": [], "edges": [], "attrs": dict()}
+  | let s = dot_stringify(g)
+  | let r = dot_parse(s)
+  | assert_eq(r["name"], "my graph")
+end
+
+def test_stringify_roundtrip():
+  let input = "digraph pipeline {\n  graph [rankdir=LR]\n  checkout [label=\"Checkout\" shape=box]\n  build [label=\"Build\" shape=box]\n  test [label=\"Test\" shape=diamond]\n  deploy [label=\"Deploy\" shape=box]\n  checkout -> build\n  build -> test\n  test -> deploy [label=\"passed\"]\n}"
+  | let r1 = dot_parse(input)
+  | let r2 = dot_parse(dot_stringify(r1))
+  | assert_eq(r2["type"],  r1["type"])
+  | assert_eq(r2["name"],  r1["name"])
+  | assert_len(r2["nodes"], len(r1["nodes"]))
+  | assert_len(r2["edges"], len(r1["edges"]))
+  | assert_eq(r2["attrs"]["graph"]["rankdir"], r1["attrs"]["graph"]["rankdir"])
+end
+
 # -- realistic DOT graph --
 
 def test_realistic_pipeline():
