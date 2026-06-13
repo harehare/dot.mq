@@ -17,67 +17,84 @@ def _dot_parse_attrs(s):
       dict()
     else:
       do
-        let pairs = split(t, ",\\s*")
+        let pairs = regex_match(t, "[A-Za-z_][A-Za-z0-9_]*\\s*=\\s*(?:\"[^\"]*\"|[^,\\s\\]]+)")
         | fold(pairs, dict(), fn(acc, pair):
-            let m = capture(trim(pair), "^(?P<k>[^=]+)=(?P<v>.*)")
+            let m = capture(trim(pair), "^(?P<k>[A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*(?P<v>.*)")
             | if (is_none(m["k"])): acc
               else: set(acc, trim(m["k"]), _dot_trim_quotes(trim(m["v"])))
           ;)
       end
 end
 
-def _dot_parse_line(line, nodes, edges, attrs):
+def _dot_parse_line(line, nd_list, eg_list, attrs):
   let l = trim(line)
   | if (len(l) == 0 || l == "{" || l == "}" || starts_with(l, "//")):
-      [nodes, edges, attrs]
-    # graph-level attributes: key=value;
+      [nd_list, eg_list, attrs]
+    # graph-level attribute blocks: graph/node/edge [...]
     elif (is_regex_match(l, "^(graph|node|edge)\\s*\\[")):
       do
-        let m = capture(l, "^(?P<scope>graph|node|edge)\\s*\\[(?P<body>[^\\]]*)\\]")
+        let m     = capture(l, "^(?P<scope>graph|node|edge)\\s*\\[(?P<body>[^\\]]*)\\]")
         | let scope = m["scope"]
         | let kv    = _dot_parse_attrs(if (is_none(m["body"])): "" else: m["body"])
-        | [nodes, edges, set(attrs, scope, kv)]
+        | [nd_list, eg_list, set(attrs, scope, kv)]
       end
-    # edge: A -> B or A -- B (with optional [attrs])
+    # edge: A -> B or A -- B (chains like A -> B -> C supported)
     elif (is_regex_match(l, "->|--")):
       do
-        let m = capture(l, "^(?P<from>\"[^\"]+\"|[A-Za-z0-9_]+)\\s*(?:->|--)\\s*(?P<to>\"[^\"]+\"|[A-Za-z0-9_]+)(?:\\s*\\[(?P<body>[^\\]]*)\\])?")
-        | if (is_none(m["from"])):
-            [nodes, edges, attrs]
-          else:
-            do
-              let from_ = _dot_trim_quotes(m["from"])
-              | let to_  = _dot_trim_quotes(m["to"])
-              | let ea   = if (is_none(m["body"])): dict() else: _dot_parse_attrs(m["body"])
-              | let edge = {"from": from_, "to": to_, "attrs": ea}
-              | let new_nodes = fold([from_, to_], nodes, fn(acc, id_):
-                  if (any(acc, fn(n): n["id"] == id_;)):
-                    acc
-                  else:
-                    acc + [{"id": id_, "attrs": dict()}]
-                ;)
-              | [new_nodes, edges + [edge], attrs]
-            end
+        let is_dir = is_regex_match(l, "->")
+        | let sep   = if (is_dir): "\\s*->\\s*" else: "\\s*--\\s*"
+        | let raw_parts = split(l, sep)
+        | let np    = len(raw_parts)
+        | let last  = trim(raw_parts[np - 1])
+        | let ea    = if (is_regex_match(last, "\\[")):
+              do
+                let m = capture(last, "\\[(?P<body>[^\\]]*)\\]")
+                | if (is_none(m["body"])): dict() else: _dot_parse_attrs(m["body"])
+              end
+            else: dict()
+        | let chain = map(raw_parts, fn(p):
+            let pt = trim(p)
+            | _dot_trim_quotes(if (is_regex_match(pt, "\\[")): trim(first(split(pt, "\\["))) else: pt)
+          ;)
+        | var nd2 = nd_list
+        | var eg2 = eg_list
+        | var idx = 0
+        | let cn  = len(chain)
+        | let _   = while (idx < cn - 1):
+            let from_ = chain[idx]
+            | let to_  = chain[idx + 1]
+            | let edge = {"from": from_, "to": to_, "attrs": if (idx == cn - 2): ea else: dict()}
+            | nd2 = fold([from_, to_], nd2, fn(acc, id_):
+                if (any(acc, fn(n): n["id"] == id_;)):
+                  acc
+                else:
+                  acc + [{"id": id_, "attrs": dict()}]
+              ;)
+            | eg2 = eg2 + [edge]
+            | idx += 1
+            | nd2
+          end
+        | [nd2, eg2, attrs]
       end
     # node: A [attrs] or A;
     elif (is_regex_match(l, "^(\"[^\"]+\"|[A-Za-z0-9_]+)\\s*(\\[|;|$)")):
       do
         let m = capture(l, "^(?P<id>\"[^\"]+\"|[A-Za-z0-9_]+)(?:\\s*\\[(?P<body>[^\\]]*)\\])?")
         | if (is_none(m["id"])):
-            [nodes, edges, attrs]
+            [nd_list, eg_list, attrs]
           else:
             do
               let id_  = _dot_trim_quotes(m["id"])
               | let na = if (is_none(m["body"])): dict() else: _dot_parse_attrs(m["body"])
-              | let new_nodes = if (any(nodes, fn(n): n["id"] == id_;)):
-                    map(nodes, fn(n): if (n["id"] == id_): set(n, "attrs", na) else: n;)
+              | let new_nd = if (any(nd_list, fn(n): n["id"] == id_;)):
+                    map(nd_list, fn(n): if (n["id"] == id_): set(n, "attrs", na) else: n;)
                   else:
-                    nodes + [{"id": id_, "attrs": na}]
-              | [new_nodes, edges, attrs]
+                    nd_list + [{"id": id_, "attrs": na}]
+              | [new_nd, eg_list, attrs]
             end
       end
     else:
-      [nodes, edges, attrs]
+      [nd_list, eg_list, attrs]
 end
 
 # ─── public API ───────────────────────────────────────────────────────────────
@@ -85,30 +102,31 @@ end
 # Parses a Graphviz DOT string and returns structured data.
 # Output: { type, name, strict, nodes, edges, attrs }
 def dot_parse(input):
-  let raw = to_string(input)
-  | let header_m = capture(raw, "(?i)^\\s*(?P<strict>strict\\s+)?(?P<type>digraph|graph)\\s*(?P<name>\"[^\"]+\"|[A-Za-z0-9_]*)\\s*\\{")
-  | if (is_none(header_m["type"])):
+  let raw    = to_string(input)
+  | let hm   = capture(raw, "(?i)^\\s*(?P<strict>strict\\s+)?(?P<type>digraph|graph)\\s*(?P<name>\"[^\"]+\"|[A-Za-z0-9_]*)\\s*\\{")
+  | if (is_none(hm["type"])):
       error("dot: could not find graph/digraph header")
     else:
       do
-        let type_  = downcase(header_m["type"])
-        | let name_  = _dot_trim_quotes(if (is_none(header_m["name"])): "" else: header_m["name"])
-        | let strict = not(is_none(header_m["strict"])) && len(trim(header_m["strict"])) > 0
-        | let lines  = split(raw, "\n") | map(fn(l): trim(replace(l, ";", ""));)
-        | var nodes = []
-        | var edges = []
-        | var attrs = dict()
+        let type_   = downcase(hm["type"])
+        | let name_ = _dot_trim_quotes(if (is_none(hm["name"])): "" else: hm["name"])
+        | let strict = not(is_none(hm["strict"])) && len(trim(hm["strict"])) > 0
+        | let normalized = replace(replace(raw, "{", "{\n"), "}", "\n}")
+        | let lines  = map(split(normalized, "\n"), fn(l): trim(replace(l, ";", ""));)
+        | var nd_list = []
+        | var eg_list = []
+        | var attrs   = dict()
         | var i = 0
         | let n = len(lines)
         | let _ = while (i < n):
-            let r = _dot_parse_line(lines[i], nodes, edges, attrs)
-            | nodes = r[0]
-            | edges = r[1]
-            | attrs = r[2]
+            let r  = _dot_parse_line(lines[i], nd_list, eg_list, attrs)
+            | nd_list = r[0]
+            | eg_list = r[1]
+            | attrs   = r[2]
             | i += 1
-            | nodes
+            | nd_list
           end
-        | {"type": type_, "name": name_, "strict": strict, "nodes": nodes, "edges": edges, "attrs": attrs}
+        | {"type": type_, "name": name_, "strict": strict, "nodes": nd_list, "edges": eg_list, "attrs": attrs}
       end
 end
 
@@ -119,7 +137,7 @@ end
 
 # Returns nodes that have no incoming edges (source nodes in a digraph).
 def dot_sources(input):
-  let g = dot_parse(input)
+  let g       = dot_parse(input)
   | let targets = map(g["edges"], fn(e): e["to"];)
   | filter(g["nodes"], fn(n): not(any(targets, fn(t): t == n["id"];));)
 end
