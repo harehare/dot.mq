@@ -1,0 +1,141 @@
+include "test"
+| include "dot"
+|
+
+# -- graph type detection --
+
+def test_digraph_type():
+  let result = dot_parse("digraph G {}")
+  | assert_eq(result["type"], "digraph")
+end
+
+def test_graph_type():
+  let result = dot_parse("graph G {}")
+  | assert_eq(result["type"], "graph")
+end
+
+def test_digraph_is_directed():
+  assert_true(dot_is_directed("digraph G {}"))
+end
+
+def test_graph_is_not_directed():
+  assert_false(dot_is_directed("graph G {}"))
+end
+
+# -- graph name --
+
+def test_named_graph():
+  let result = dot_parse("digraph pipeline {}")
+  | assert_eq(result["name"], "pipeline")
+end
+
+def test_anonymous_graph():
+  let result = dot_parse("digraph {}")
+  | assert_eq(result["name"], "")
+end
+
+def test_quoted_name():
+  let result = dot_parse("digraph \"my graph\" {}")
+  | assert_eq(result["name"], "my graph")
+end
+
+# -- strict --
+
+def test_strict_flag():
+  let result = dot_parse("strict digraph G {}")
+  | assert_true(result["strict"])
+end
+
+def test_non_strict():
+  let result = dot_parse("digraph G {}")
+  | assert_false(result["strict"])
+end
+
+# -- nodes --
+
+def test_node_without_attrs():
+  let result = dot_parse("digraph G { A }")
+  | assert_len(result["nodes"], 1)
+  | assert_eq(result["nodes"][0]["id"], "A")
+end
+
+def test_node_with_label():
+  let result = dot_parse("digraph G { A [label=\"Start\"] }")
+  | let node = first(filter(result["nodes"], fn(n): n["id"] == "A";))
+  | assert_eq(node["attrs"]["label"], "Start")
+end
+
+def test_node_with_shape():
+  let result = dot_parse("digraph G { A [shape=box label=\"Start\"] }")
+  | let node = first(filter(result["nodes"], fn(n): n["id"] == "A";))
+  | assert_eq(node["attrs"]["shape"], "box")
+end
+
+# -- edges --
+
+def test_directed_edge():
+  let result = dot_parse("digraph G { A -> B }")
+  | assert_len(result["edges"], 1)
+  | assert_eq(result["edges"][0]["from"], "A")
+  | assert_eq(result["edges"][0]["to"], "B")
+end
+
+def test_undirected_edge():
+  let result = dot_parse("graph G { A -- B }")
+  | assert_len(result["edges"], 1)
+  | assert_eq(result["edges"][0]["from"], "A")
+  | assert_eq(result["edges"][0]["to"], "B")
+end
+
+def test_edge_with_label():
+  let result = dot_parse("digraph G { A -> B [label=\"ok\"] }")
+  | assert_eq(result["edges"][0]["attrs"]["label"], "ok")
+end
+
+def test_edge_creates_nodes():
+  let result = dot_parse("digraph G { A -> B -> C }")
+  | assert_len(result["edges"], 2)
+end
+
+def test_multiple_edges():
+  let result = dot_parse("digraph G {\n  A -> B\n  B -> C\n  C -> D\n}")
+  | assert_len(result["edges"], 3)
+end
+
+# -- implicit node collection from edges --
+
+def test_nodes_collected_from_edges():
+  let result = dot_parse("digraph G { A -> B\n B -> C }")
+  | let ids = map(result["nodes"], fn(n): n["id"];)
+  | assert_contains(ids, "A")
+  | assert_contains(ids, "B")
+  | assert_contains(ids, "C")
+end
+
+# -- dot_sources --
+
+def test_source_nodes():
+  let result = dot_sources("digraph G { A -> B\n B -> C }")
+  | let ids = map(result, fn(n): n["id"];)
+  | assert_contains(ids, "A")
+  | assert(not(any(ids, fn(i): i == "B";)))
+  | assert(not(any(ids, fn(i): i == "C";)))
+end
+
+def test_no_sources_in_cycle():
+  let result = dot_sources("digraph G { A -> B\n B -> A }")
+  | assert_empty(result)
+end
+
+# -- realistic DOT graph --
+
+def test_realistic_pipeline():
+  let input = "digraph pipeline {\n  graph [rankdir=LR]\n  checkout [label=\"Checkout\" shape=box]\n  build [label=\"Build\" shape=box]\n  test [label=\"Test\" shape=diamond]\n  deploy [label=\"Deploy\" shape=box]\n  checkout -> build\n  build -> test\n  test -> deploy [label=\"passed\"]\n}"
+  | let result = dot_parse(input)
+  | assert_eq(result["type"], "digraph")
+  | assert_eq(result["name"], "pipeline")
+  | assert_len(result["nodes"], 4)
+  | assert_len(result["edges"], 3)
+  | let sources = dot_sources(input)
+  | assert_eq(first(sources)["id"], "checkout")
+end
