@@ -1,0 +1,125 @@
+# Graphviz DOT language parser implemented in mq
+# https://graphviz.org/doc/info/lang.html
+
+# ─── internal ─────────────────────────────────────────────────────────────────
+
+def _dot_trim_quotes(s):
+  let t = trim(s)
+  | if (starts_with(t, "\"") && ends_with(t, "\"")):
+      slice(t, 1, len(t) - 1)
+    else:
+      t
+end
+
+def _dot_parse_attrs(s):
+  let t = trim(s)
+  | if (len(t) == 0):
+      dict()
+    else:
+      do
+        let pairs = split(t, ",\\s*")
+        | fold(pairs, dict(), fn(acc, pair):
+            let m = capture(trim(pair), "^(?P<k>[^=]+)=(?P<v>.*)")
+            | if (is_none(m["k"])): acc
+              else: set(acc, trim(m["k"]), _dot_trim_quotes(trim(m["v"])))
+          ;)
+      end
+end
+
+def _dot_parse_line(line, nodes, edges, attrs):
+  let l = trim(line)
+  | if (len(l) == 0 || l == "{" || l == "}" || starts_with(l, "//")):
+      [nodes, edges, attrs]
+    # graph-level attributes: key=value;
+    elif (is_regex_match(l, "^(graph|node|edge)\\s*\\[")):
+      do
+        let m = capture(l, "^(?P<scope>graph|node|edge)\\s*\\[(?P<body>[^\\]]*)\\]")
+        | let scope = m["scope"]
+        | let kv    = _dot_parse_attrs(if (is_none(m["body"])): "" else: m["body"])
+        | [nodes, edges, set(attrs, scope, kv)]
+      end
+    # edge: A -> B or A -- B (with optional [attrs])
+    elif (is_regex_match(l, "->|--")):
+      do
+        let m = capture(l, "^(?P<from>\"[^\"]+\"|[A-Za-z0-9_]+)\\s*(?:->|--)\\s*(?P<to>\"[^\"]+\"|[A-Za-z0-9_]+)(?:\\s*\\[(?P<body>[^\\]]*)\\])?")
+        | if (is_none(m["from"])):
+            [nodes, edges, attrs]
+          else:
+            do
+              let from_ = _dot_trim_quotes(m["from"])
+              | let to_  = _dot_trim_quotes(m["to"])
+              | let ea   = if (is_none(m["body"])): dict() else: _dot_parse_attrs(m["body"])
+              | let edge = {"from": from_, "to": to_, "attrs": ea}
+              | let new_nodes = fold([from_, to_], nodes, fn(acc, id_):
+                  if (any(acc, fn(n): n["id"] == id_;)):
+                    acc
+                  else:
+                    acc + [{"id": id_, "attrs": dict()}]
+                ;)
+              | [new_nodes, edges + [edge], attrs]
+            end
+      end
+    # node: A [attrs] or A;
+    elif (is_regex_match(l, "^(\"[^\"]+\"|[A-Za-z0-9_]+)\\s*(\\[|;|$)")):
+      do
+        let m = capture(l, "^(?P<id>\"[^\"]+\"|[A-Za-z0-9_]+)(?:\\s*\\[(?P<body>[^\\]]*)\\])?")
+        | if (is_none(m["id"])):
+            [nodes, edges, attrs]
+          else:
+            do
+              let id_  = _dot_trim_quotes(m["id"])
+              | let na = if (is_none(m["body"])): dict() else: _dot_parse_attrs(m["body"])
+              | let new_nodes = if (any(nodes, fn(n): n["id"] == id_;)):
+                    map(nodes, fn(n): if (n["id"] == id_): set(n, "attrs", na) else: n;)
+                  else:
+                    nodes + [{"id": id_, "attrs": na}]
+              | [new_nodes, edges, attrs]
+            end
+      end
+    else:
+      [nodes, edges, attrs]
+end
+
+# ─── public API ───────────────────────────────────────────────────────────────
+
+# Parses a Graphviz DOT string and returns structured data.
+# Output: { type, name, strict, nodes, edges, attrs }
+def dot_parse(input):
+  let raw = to_string(input)
+  | let header_m = capture(raw, "(?i)^\\s*(?P<strict>strict\\s+)?(?P<type>digraph|graph)\\s*(?P<name>\"[^\"]+\"|[A-Za-z0-9_]*)\\s*\\{")
+  | if (is_none(header_m["type"])):
+      error("dot: could not find graph/digraph header")
+    else:
+      do
+        let type_  = downcase(header_m["type"])
+        | let name_  = _dot_trim_quotes(if (is_none(header_m["name"])): "" else: header_m["name"])
+        | let strict = not(is_none(header_m["strict"])) && len(trim(header_m["strict"])) > 0
+        | let lines  = split(raw, "\n") | map(fn(l): trim(replace(l, ";", ""));)
+        | var nodes = []
+        | var edges = []
+        | var attrs = dict()
+        | var i = 0
+        | let n = len(lines)
+        | let _ = while (i < n):
+            let r = _dot_parse_line(lines[i], nodes, edges, attrs)
+            | nodes = r[0]
+            | edges = r[1]
+            | attrs = r[2]
+            | i += 1
+            | nodes
+          end
+        | {"type": type_, "name": name_, "strict": strict, "nodes": nodes, "edges": edges, "attrs": attrs}
+      end
+end
+
+# Returns true if the graph is directed.
+def dot_is_directed(input):
+  dot_parse(input)["type"] == "digraph"
+end
+
+# Returns nodes that have no incoming edges (source nodes in a digraph).
+def dot_sources(input):
+  let g = dot_parse(input)
+  | let targets = map(g["edges"], fn(e): e["to"];)
+  | filter(g["nodes"], fn(n): not(any(targets, fn(t): t == n["id"];));)
+end
