@@ -18,10 +18,18 @@ A [Graphviz DOT](https://graphviz.org/doc/info/lang.html) language parser implem
 cp dot.mq ~/.local/mq/config/
 ```
 
-### HTTP Import
+### HTTP Import (no local installation needed)
+
+If `mq` was built with the `http-import` feature, you can import directly from GitHub without any local setup. This requires the `--allow-http-import` flag, which is disabled by default:
 
 ```sh
-mq -I raw 'import "github.com/harehare/dot.mq" | dot::dot_parse(.)' graph.dot
+mq --allow-http-import -I raw 'import "github.com/harehare/dot.mq" | dot::dot_parse(.)' graph.dot
+```
+
+Pin to a specific release with `@vX.Y.Z`:
+
+```sh
+mq --allow-http-import -I raw 'import "github.com/harehare/dot.mq@v1.0.0" | dot::dot_parse(.)' graph.dot
 ```
 
 ## API
